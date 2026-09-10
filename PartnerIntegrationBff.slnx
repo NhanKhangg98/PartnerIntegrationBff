@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="PartnerIntegration.Api/PartnerIntegration.Api.csproj" />
+  <Project Path="PartnerIntegration.Core/PartnerIntegration.Core.csproj" />
+  <Project Path="PartnerIntegration.Infrastructure/PartnerIntegration.Infrastructure.csproj" />
+  <Project Path="PartnerIntegration.UnitTests/PartnerIntegration.UnitTests.csproj" />
+</Solution>
