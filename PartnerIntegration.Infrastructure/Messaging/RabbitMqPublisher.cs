@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -32,12 +32,14 @@ public class RabbitMqPublisher : IMessagePublisher, IAsyncDisposable
 
     private async Task EnsureChannelCreatedAsync(CancellationToken ct)
     {
-        if (_channel is not null) return;
+        // Check both null and IsOpen — a non-null but closed channel means the broker
+        // restarted or the connection was dropped; we need to reconnect.
+        if (_channel is { IsOpen: true }) return;
 
         await _initLock.WaitAsync(ct);
         try
         {
-            if (_channel is not null) return;
+            if (_channel is { IsOpen: true }) return;
 
             _connection = await _factory.CreateConnectionAsync(ct);
             _channel = await _connection.CreateChannelAsync(cancellationToken: ct);

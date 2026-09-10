@@ -1,9 +1,3 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 namespace PartnerIntegration.Core.Interfaces;
 
 public interface IPartnerVerificationClient

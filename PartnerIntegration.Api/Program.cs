@@ -1,13 +1,18 @@
 using FluentValidation;
 using FluentValidation.AspNetCore;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Http.Resilience;
+using PartnerIntegration.Api.Middlewares;
 using PartnerIntegration.Core.DTOs;
 using PartnerIntegration.Core.Interfaces;
 using PartnerIntegration.Core.Services;
+using PartnerIntegration.Core.Validators;
 using PartnerIntegration.Infrastructure.Clients;
-using Polly;
-using System.Net;
 using PartnerIntegration.Infrastructure.DependencyInjection;
+using Polly;
+using Polly.Timeout;
+using System.Net;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,7 +26,30 @@ builder.Services.AddProblemDetails();
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<PartnerTransactionValidator>();
 
-// Cấu hình Typed HttpClient kèm Resilience Pipeline chuẩn Polly v8
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 10
+            }));
+
+    options.AddFixedWindowLimiter("transactions", o =>
+    {
+        o.PermitLimit = 20;
+        o.Window = TimeSpan.FromMinutes(1);
+        o.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        o.QueueLimit = 5;
+    });
+});
+
 var partnerBaseUrl = builder.Configuration["PartnerService:BaseUrl"] ?? "http://localhost:5000";
 
 builder.Services.AddHttpClient<IPartnerVerificationClient, PartnerVerificationClient>(client =>
@@ -30,7 +58,7 @@ builder.Services.AddHttpClient<IPartnerVerificationClient, PartnerVerificationCl
 })
 .AddResilienceHandler("PartnerVerificationPipeline", pipelineBuilder =>
 {
-    pipelineBuilder.AddTimeout(TimeSpan.FromSeconds(10));
+    pipelineBuilder.AddTimeout(TimeSpan.FromSeconds(30));
 
     pipelineBuilder.AddRetry(new HttpRetryStrategyOptions
     {
@@ -38,14 +66,16 @@ builder.Services.AddHttpClient<IPartnerVerificationClient, PartnerVerificationCl
         Delay = TimeSpan.FromMilliseconds(200),
         BackoffType = DelayBackoffType.Exponential,
         UseJitter = true,
-        // Chỉ retry khi gặp mã lỗi 5xx, RequestTimeout (408) hoặc Exception mạng/Timeout
         ShouldHandle = args =>
         {
             var isServerError = args.Outcome.Result is not null &&
-                               ((int)args.Outcome.Result.StatusCode >= 500 ||
-                                args.Outcome.Result.StatusCode == HttpStatusCode.RequestTimeout);
+                                ((int)args.Outcome.Result.StatusCode >= 500 ||
+                                 args.Outcome.Result.StatusCode == HttpStatusCode.RequestTimeout);
 
-            var isTransientException = args.Outcome.Exception is HttpRequestException or TimeoutException;
+            var isTransientException = args.Outcome.Exception is
+                HttpRequestException or
+                TimeoutException or
+                TimeoutRejectedException;
 
             return ValueTask.FromResult(isServerError || isTransientException);
         }
@@ -54,12 +84,12 @@ builder.Services.AddHttpClient<IPartnerVerificationClient, PartnerVerificationCl
     pipelineBuilder.AddCircuitBreaker(new HttpCircuitBreakerStrategyOptions
     {
         SamplingDuration = TimeSpan.FromSeconds(15),
-        FailureRatio = 0.5, // 50% lỗi thì mở mạch ngắt request ngay lập tức
+        FailureRatio = 0.5,
         MinimumThroughput = 5,
         BreakDuration = TimeSpan.FromSeconds(10)
     });
 
-    pipelineBuilder.AddTimeout(TimeSpan.FromSeconds(2));
+    pipelineBuilder.AddTimeout(TimeSpan.FromSeconds(3));
 });
 
 builder.Services.AddScoped<ITransactionProcessingService, TransactionProcessingService>();
@@ -68,6 +98,9 @@ builder.Services.AddRabbitMqMessaging(builder.Configuration);
 var app = builder.Build();
 
 app.UseExceptionHandler();
+app.UseRateLimiter();
+
+app.UseMiddleware<ApiKeyMiddleware>();
 
 if (app.Environment.IsDevelopment())
 {
@@ -76,6 +109,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.MapControllers();
+
+app.MapControllers()
+   .RequireRateLimiting("transactions");
 
 app.Run();
+
+public partial class Program { }
