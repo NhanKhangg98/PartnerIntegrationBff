@@ -1,0 +1,23 @@
+# Build output
+**/bin/
+**/obj/
+
+# IDE & OS
+.vs/
+.vscode/
+.idea/
+*.user
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Test project — not needed in the API image
+**/PartnerIntegration.UnitTests/
+
+# Docs
+README.md
+docs/

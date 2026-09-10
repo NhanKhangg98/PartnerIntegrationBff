@@ -1,0 +1,56 @@
+services:
+
+  # ── API ──────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: partner-integration-api
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: "http://+:8080"
+
+      # RabbitMQ — uses the service name "rabbitmq" as hostname inside the Docker network
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Port: 5672
+      RabbitMq__Username: guest
+      RabbitMq__Password: guest
+      RabbitMq__QueueName: legacy_transactions_queue
+
+      # Partner verification mock endpoint lives in the same container,
+      # so the API calls itself via localhost.
+      PartnerService__BaseUrl: "http://localhost:8080"
+
+      # Change this value before deploying to any shared environment
+      Security__ApiKeys: "docker-local-api-key"
+
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: on-failure
+
+  # ── RabbitMQ ─────────────────────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: partner-integration-rabbitmq
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI → http://localhost:15672 (guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+
+volumes:
+  rabbitmq_data:
+    driver: local
